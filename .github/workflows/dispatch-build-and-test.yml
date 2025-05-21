@@ -12,10 +12,8 @@ on:
         description: 'what php version to test against'
         type: choice
         options:
-          - '7.4'
-          - '8.0'
-          - '8.1'
-        default: '8.1'
+          - '8.4.7'
+        default: '8.4.7'
       compileroptimizationlevel:
         description: 'The g++ -O flag number'
         type: choice

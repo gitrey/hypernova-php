@@ -59,66 +59,90 @@ public class HypernovaRenderer {
             return new HypernovaResponse(new HashMap<>(), null);
         }
 
-        List<HypernovaJob> currentJobs = new ArrayList<>();
-        Map<String, HypernovaJob> originalJobMap = new HashMap<>(this.incomingJobs); 
+        Map<String, HypernovaJob> originalJobMap = new HashMap<>(this.incomingJobs);
+        List<HypernovaJob> initialProcessedJobs = new ArrayList<>();
 
-        for (Map.Entry<String, HypernovaJob> entry : new ArrayList<>(this.incomingJobs.entrySet())) {
-            String clientJobId = entry.getKey(); 
+        for (Map.Entry<String, HypernovaJob> entry : originalJobMap.entrySet()) { // Iterate over a copy
+            String clientJobId = entry.getKey();
             HypernovaJob originalJobForThisClient = entry.getValue();
-            
+
             HypernovaJob processedJob = new HypernovaJob(
-                originalJobForThisClient.getName(), 
+                originalJobForThisClient.getName(),
                 originalJobForThisClient.getData() != null ? new HashMap<>(originalJobForThisClient.getData()) : new HashMap<>(),
                 originalJobForThisClient.getMetadata() != null ? new HashMap<>(originalJobForThisClient.getMetadata()) : new HashMap<>()
             );
             if (processedJob.getMetadata() == null) processedJob.setMetadata(new HashMap<>());
             processedJob.getMetadata().put("_originalClientId", clientJobId);
+            initialProcessedJobs.add(processedJob);
+        }
+
+        // Create the map HERE, using initialProcessedJobs
+        Map<String, String> jobNameToOriginalClientIdMap = initialProcessedJobs.stream()
+            .filter(job -> job.getName() != null && job.getMetadata() != null && job.getMetadata().containsKey("_originalClientId"))
+            .collect(Collectors.toMap(
+                HypernovaJob::getName,
+                job -> (String) job.getMetadata().get("_originalClientId"),
+                (id1, id2) -> {
+                    log.warn("Duplicate job name '{}' found while creating _originalClientId map. Using the first encountered ID: {}.", id1, id2); 
+                    return id1;
+                }
+            ));
+
+        List<HypernovaJob> currentJobs = new ArrayList<>(); // This will be populated by the getViewData loop
+
+        // Now, iterate over initialProcessedJobs for the getViewData loop
+        for (HypernovaJob jobToProcessByViewData : initialProcessedJobs) {
+            String clientJobIdForLoop = (String) jobToProcessByViewData.getMetadata().get("_originalClientId");
+            HypernovaJob originalJobForThisClientInLoop = originalJobMap.get(clientJobIdForLoop);
+
+            HypernovaJob processedByViewData = jobToProcessByViewData; 
 
             for (HypernovaPlugin plugin : plugins) {
-                HypernovaJob jobStateBeforePlugin = processedJob; 
+                HypernovaJob jobStateBeforePlugin = processedByViewData;
                 try {
-                    HypernovaJob pluginInputJob = new HypernovaJob(
-                        processedJob.getName(),
-                        processedJob.getData() != null ? new HashMap<>(processedJob.getData()) : new HashMap<>(),
-                        processedJob.getMetadata() != null ? new HashMap<>(processedJob.getMetadata()) : new HashMap<>()
+                    HypernovaJob pluginInputJob = new HypernovaJob( 
+                        processedByViewData.getName(),
+                        processedByViewData.getData() != null ? new HashMap<>(processedByViewData.getData()) : new HashMap<>(),
+                        processedByViewData.getMetadata() != null ? new HashMap<>(processedByViewData.getMetadata()) : new HashMap<>()
                     );
-                    processedJob = plugin.getViewData(pluginInputJob.getName(), pluginInputJob.getData(), originalJobForThisClient);
-                    if (processedJob == null) { 
-                        log.warn("Plugin {} returned null from getViewData for job (client ID: {}, component: {}). Dropping job.", 
-                                 plugin.getClass().getSimpleName(), clientJobId, originalJobForThisClient.getName());
-                        break; 
+                    
+                    processedByViewData = plugin.getViewData(pluginInputJob.getName(), pluginInputJob.getData(), originalJobForThisClientInLoop);
+                    if (processedByViewData == null) {
+                        log.warn("Plugin {} returned null from getViewData for job (client ID: {}, component: {}). Dropping job.",
+                                 plugin.getClass().getSimpleName(), clientJobIdForLoop, (originalJobForThisClientInLoop != null ? originalJobForThisClientInLoop.getName() : "N/A"));
+                        break;
                     }
+                    // Ensure _originalClientId from jobToProcessByViewData is preserved
+                    if (processedByViewData.getMetadata() == null) {
+                        processedByViewData.setMetadata(new HashMap<>());
+                    }
+                    if (!processedByViewData.getMetadata().containsKey("_originalClientId") && 
+                        jobToProcessByViewData.getMetadata() != null && 
+                        jobToProcessByViewData.getMetadata().containsKey("_originalClientId")) {
+                        processedByViewData.getMetadata().put("_originalClientId", jobToProcessByViewData.getMetadata().get("_originalClientId"));
+                    }
+
                 } catch (Exception e) {
                     log.error("Plugin {} threw an exception during getViewData for job (client ID: {}, component: {}): {}. Continuing with job state before this plugin.",
-                              plugin.getClass().getSimpleName(), clientJobId, originalJobForThisClient.getName(), e.getMessage(), e);
-                    processedJob = jobStateBeforePlugin; 
+                              plugin.getClass().getSimpleName(), clientJobIdForLoop, (originalJobForThisClientInLoop != null ? originalJobForThisClientInLoop.getName() : "N/A"), e.getMessage(), e);
+                    processedByViewData = jobStateBeforePlugin;
                 }
             }
-            if (processedJob != null) {
-                 currentJobs.add(processedJob);
+            if (processedByViewData != null) {
+                 currentJobs.add(processedByViewData); 
             }
         }
-        
+
         this.incomingJobs.clear();
 
         if (currentJobs.isEmpty()) {
             log.info("All jobs were dropped or no jobs were processed after getViewData. Returning empty response.");
             return new HypernovaResponse(new HashMap<>(), null);
         }
+        
+        // jobNameToOriginalClientIdMap is already created above
 
-        // Safeguard: Store _originalClientId mapping before plugins modify the jobs list structure
-        Map<String, String> jobNameToOriginalClientIdMap = currentJobs.stream()
-            .filter(job -> job.getName() != null && job.getMetadata() != null && job.getMetadata().containsKey("_originalClientId"))
-            .collect(Collectors.toMap(
-                HypernovaJob::getName,
-                job -> (String) job.getMetadata().get("_originalClientId"),
-                (id1, id2) -> {
-                    log.warn("Duplicate job name '{}' found while creating _originalClientId map. Using the first encountered ID: {}.", id1, id2);
-                    return id1; // In case of duplicate names (should ideally not happen for jobs sent to Hypernova)
-                }
-            ));
-
-        List<HypernovaJob> jobsToPrepareHolder = new ArrayList<>(currentJobs); 
+        List<HypernovaJob> jobsToPrepareHolder = new ArrayList<>(currentJobs);
         List<HypernovaJob> originalJobsForPrepare = Collections.unmodifiableList(new ArrayList<>(originalJobMap.values()));
         for (HypernovaPlugin plugin : plugins) {
             try {
@@ -225,8 +249,15 @@ public class HypernovaRenderer {
                     if (matchedProcessedJob != null && matchedProcessedJob.getMetadata() != null) {
                         String originalClientId = (String) matchedProcessedJob.getMetadata().get("_originalClientId");
                         if (originalClientId != null && originalJobMap.containsKey(originalClientId)) {
-                            if (result.getMeta() == null) result.setMeta(new HashMap<>());
-                            result.getMeta().put("_originalClientId", originalClientId);
+                            Map<String, Object> meta = result.getMeta();
+                            if (meta == null) {
+                                meta = new HashMap<>();
+                            } else {
+                                // Ensure it's a mutable copy if it's not null
+                                meta = new HashMap<>(meta); 
+                            }
+                            meta.put("_originalClientId", originalClientId);
+                            result.setMeta(meta); // Set the potentially new map back
                             result.setOriginalJob(originalJobMap.get(originalClientId)); 
                         } else {
                              log.warn("Could not find _originalClientId or original job in originalJobMap for processed job named: {} (client ID from meta: {})", hypernovaKey, originalClientId);

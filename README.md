@@ -1,265 +1,258 @@
-# Java Client for Hypernova
+# Hypernova Client for Java
 
-## Overview
+A Java client library for interacting with a Hypernova server for Server-Side Rendering (SSR) of UI components.
 
-Hypernova is a service that enables server-side rendering (SSR) of JavaScript views. This allows you to render your client-side components on the server, sending fully-formed HTML to the browser. This can improve performance, SEO, and user experience.
-
-This library is a Java client designed to facilitate interaction with a Hypernova service from a Java-based application, particularly one built with Spring Boot.
+This library is a Java 17 rewrite of the original PHP client, providing similar features and a plugin architecture.
 
 ## Features
 
-*   **Batching:** Efficiently renders multiple components (jobs) in a single request to the Hypernova service.
-*   **Extensible Plugin System:** Allows customization of the rendering lifecycle through plugins. Hook into various stages like job creation, request preparation, response processing, and error handling.
-*   **Fallback Mechanism:** Provides a configurable way to generate client-side fallback HTML if server-side rendering fails, ensuring users still see content.
-*   **Spring Boot Integration:** Designed to be easily integrated into Spring Boot applications, with autoconfiguration support for key components.
+*   Batching of rendering jobs
+*   Plugin system for extending functionality (e.g., `DevModePlugin` for enhanced error reporting)
+*   Server-Side Rendering via Hypernova
+*   Fallback HTML generation on errors
+*   Configurable HTTP client (OkHttp)
 
-## Prerequisites
+## Requirements
 
-*   Java 17 or newer.
-*   Apache Maven 3.6.x or newer.
-*   A running Hypernova service instance accessible from your application.
+*   Java 17 or later
+*   Hypernova server accessible via HTTP
 
-## Installation/Setup (for a Spring Boot project)
+## Installation
 
-This library would typically be packaged as a JAR and deployed to a Maven repository (like Maven Central or a private one).
+To use this library in your project, add the following dependency to your build configuration.
 
-**If it were deployed to a repository:**
+**(Assuming a group ID `com.example` and artifact ID `hypernova-java-client`, version `1.0.0`. Replace with actual coordinates when published.)**
 
-You would add the following dependency to your `pom.xml`:
-
+**Maven:**
 ```xml
 <dependency>
-    <groupId>com.example.hypernova</groupId> <!-- Replace with actual groupId -->
-    <artifactId>hypernova-java-client</artifactId> <!-- Replace with actual artifactId -->
-    <version>1.0.0</version> <!-- Replace with actual version -->
+    <groupId>com.example</groupId>
+    <artifactId>hypernova-java-client</artifactId>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-**For local module usage (current setup):**
+**Gradle:**
+```groovy
+implementation 'com.example:hypernova-java-client:1.0.0'
+```
 
-Since this project (`demo`) itself contains the Hypernova client code, you are already using it directly. If this client were a separate module, you would include it as a local module dependency in your `pom.xml`.
+## Basic Usage
 
-```xml
-<!-- Example if hypernova-java-client were a local module named 'hypernova-client' -->
-<!--
-<dependency>
-    <groupId>com.example</groupId>
-    <artifactId>hypernova-client</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-</dependency>
--->
+Here's a simple example of how to use the `HypernovaRenderer`:
+
+```java
+// main method or relevant part of your application
+import com.example.hypernova.DevModePlugin;
+import com.example.hypernova.HypernovaRenderer;
+import com.example.hypernova.HypernovaResponse;
+import com.example.hypernova.Job;
+import com.example.hypernova.JobResult;
+import com.example.hypernova.Plugin;
+import okhttp3.OkHttpClient; // For custom client example
+import com.fasterxml.jackson.databind.ObjectMapper; // For custom mapper example
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) {
+        // 1. Create a HypernovaRenderer instance
+        // Replace "http://localhost:3030/batch" with your Hypernova server URL
+        
+        // Basic renderer:
+        // HypernovaRenderer renderer = new HypernovaRenderer("http://localhost:3030/batch");
+
+        // Renderer with plugins:
+        List<Plugin> plugins = new ArrayList<>();
+        plugins.add(new DevModePlugin()); 
+        // plugins.add(new LoggingPlugin()); // Assuming LoggingPlugin is defined as per example below
+        
+        HypernovaRenderer renderer = new HypernovaRenderer(
+            "http://localhost:3030/batch", // Hypernova server URL
+            plugins,                       // List of plugins
+            new OkHttpClient(),            // Default or custom OkHttpClient
+            new ObjectMapper()             // Default or custom ObjectMapper
+        );
+
+        // 2. Add jobs
+        Map<String, Object> componentData1 = Map.of("title", "My Component 1");
+        Job job1 = new Job("MyComponent.js", componentData1, Collections.emptyMap());
+        renderer.addJob("component1", job1);
+
+        Map<String, Object> componentData2 = Map.of("message", "Hello from Hypernova!");
+        // Or use the convenience method:
+        renderer.addJob("component2", "OtherComponent.js", componentData2, Collections.emptyMap());
+
+        // 3. Render the jobs
+        HypernovaResponse response = renderer.render();
+
+        // 4. Process the response
+        if (response.getError() != null) {
+            System.err.println("Top-level error rendering jobs: " + response.getError().getMessage());
+            if (response.getError().getStack() != null) {
+                response.getError().getStack().forEach(line -> System.err.println("  " + line));
+            }
+        }
+
+        for (Map.Entry<String, JobResult> entry : response.getResults().entrySet()) {
+            String id = entry.getKey();
+            JobResult result = entry.getValue();
+
+            if (result.isSuccess()) {
+                System.out.println("Rendered HTML for " + id + " (" + result.getOriginalJob().getName() + "):");
+                System.out.println(result.getHtml());
+            } else {
+                System.err.println("Error rendering " + id + " (" + result.getOriginalJob().getName() + "): " + 
+                                   (result.getError() != null ? result.getError().getMessage() : "Unknown error"));
+                if (result.getError() != null && result.getError().getStack() != null) {
+                    result.getError().getStack().forEach(line -> System.err.println("  " + line));
+                }
+                System.err.println("Fallback HTML for " + id + ":");
+                System.err.println(result.getHtml()); // This will be fallback HTML, possibly wrapped by DevModePlugin
+            }
+        }
+    }
+}
+```
+
+## Plugins
+
+The Hypernova client features a plugin system that allows you to hook into various stages of the rendering lifecycle. This enables customization for logging, modifying job data, error handling, and more.
+
+To create a plugin, implement the `com.example.hypernova.Plugin` interface or extend the `com.example.hypernova.BasePlugin` class (which provides default no-op implementations).
+
+Key methods in the `Plugin` interface:
+*   `getViewData(String name, Map<String, Object> data)`: Modify data for a specific job before it's prepared for the request.
+*   `prepareRequest(Map<String, Job> jobs, Map<String, Job> originalJobs)`: Modify the entire batch of jobs before sending.
+*   `shouldSendRequest(Map<String, Job> jobs)`: Decide if the request should be sent to the server. Returning `false` aborts the request and triggers fallback.
+*   `willSendRequest(Map<String, Job> jobs)`: Called just before the HTTP request is made. Useful for logging.
+*   `onError(HypernovaError error, List<Job> jobs)`: Handles errors, either top-level or for individual jobs.
+*   `onSuccess(JobResult jobResult)`: Called for each successfully rendered job.
+*   `afterResponse(Map<String, JobResult> jobResults)`: Process or modify the final map of job results.
+
+**Example Custom Plugin:**
+A simple plugin that logs information before a request is sent.
+
+```java
+package com.example.hypernova.plugins; // Example package for your custom plugins
+
+import com.example.hypernova.BasePlugin;
+import com.example.hypernova.Job;
+import java.util.Map;
+import java.util.List; // Required for other plugin methods if overridden
+
+public class LoggingPlugin extends BasePlugin {
+    @Override
+    public void willSendRequest(Map<String, Job> jobs) {
+        System.out.println("Preparing to send " + jobs.size() + " jobs to Hypernova:");
+        for (Map.Entry<String, Job> entry : jobs.entrySet()) {
+            System.out.println(" - Job ID: " + entry.getKey() + ", Component: " + entry.getValue().getName());
+        }
+    }
+}
+```
+
+**Using Plugins:**
+Plugins are passed to the `HypernovaRenderer` constructor as a list.
+
+```java
+import com.example.hypernova.HypernovaRenderer;
+import com.example.hypernova.Plugin;
+import com.example.hypernova.DevModePlugin;
+// Assuming LoggingPlugin is in com.example.hypernova.plugins
+// import com.example.hypernova.plugins.LoggingPlugin; 
+import okhttp3.OkHttpClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.List;
+
+// ... inside your application setup
+List<Plugin> myPlugins = new ArrayList<>();
+// myPlugins.add(new LoggingPlugin()); // Add your custom plugin
+myPlugins.add(new DevModePlugin());   // Add built-in dev mode plugin
+
+HypernovaRenderer renderer = new HypernovaRenderer(
+    "http://localhost:3030/batch", // Your Hypernova server URL
+    myPlugins,
+    new OkHttpClient(), // Default or custom OkHttpClient
+    new ObjectMapper()  // Default or custom ObjectMapper
+);
+// ...
 ```
 
 ## Configuration
 
-The `HypernovaRenderer` bean is the main entry point for using the client. It is automatically configured as a Spring bean if you are using the provided Spring Boot setup (`@Service` annotation on `HypernovaRenderer`).
+The `HypernovaRenderer` can be configured by passing instances to its constructor:
 
-**Required Beans:**
+*   **Hypernova Server URL**: The first parameter of the constructor (e.g., `http://localhost:3030/batch`).
+*   **Plugins**: A `List<Plugin>` can be passed to the constructor. Plugins are executed in the order they appear in the list.
+*   **OkHttpClient**: A custom `OkHttpClient` instance can be provided for advanced HTTP configuration (e.g., timeouts, interceptors, connection pooling).
+*   **ObjectMapper**: A custom `ObjectMapper` (from Jackson) instance can be provided for specialized JSON serialization/deserialization needs (e.g., custom date formats, naming strategies).
 
-Your Spring Boot application needs to provide the following beans for `HypernovaRenderer` to function:
-
-1.  `RestTemplate`: For making HTTP requests to the Hypernova service.
-2.  `ObjectMapper`: For serializing and deserializing JSON data.
-
-Example configuration in your main application class or a `@Configuration` class:
-
+Example with custom configuration:
 ```java
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestTemplate;
+import com.example.hypernova.DevModePlugin;
+import com.example.hypernova.HypernovaRenderer;
+import com.example.hypernova.Plugin;
+import okhttp3.OkHttpClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.ArrayList;
+// ... other imports if you have more custom plugins
 
-@Configuration
-public class AppConfig {
+// Custom OkHttpClient
+OkHttpClient customHttpClient = new OkHttpClient.Builder()
+    .connectTimeout(10, TimeUnit.SECONDS)
+    .readTimeout(30, TimeUnit.SECONDS)
+    .writeTimeout(15, TimeUnit.SECONDS)
+    // Add any other OkHttp configurations like interceptors, connection pool, etc.
+    .build();
 
-    @Bean
-    public RestTemplate restTemplate() {
-        return new RestTemplate();
-    }
+// Custom ObjectMapper
+ObjectMapper customObjectMapper = new ObjectMapper();
+// Example customization: use SNAKE_CASE for JSON properties if your components expect that
+// customObjectMapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE); 
 
-    @Bean
-    public ObjectMapper objectMapper() {
-        // You can customize the ObjectMapper here if needed
-        return new ObjectMapper();
-    }
-}
+List<Plugin> appPlugins = new ArrayList<>();
+// appPlugins.add(new MyCustomAnalyticsPlugin()); // Add your own plugins
+appPlugins.add(new DevModePlugin());          // Include built-in plugins as needed
+
+HypernovaRenderer renderer = new HypernovaRenderer(
+    "https://my.hypernova.server/batch", // Production Hypernova server URL
+    appPlugins,
+    customHttpClient,
+    customObjectMapper
+);
 ```
-*Note: The `DemoApplication` in this project already includes a `RestTemplate` bean. An `ObjectMapper` bean is typically auto-configured by Spring Boot if Jackson is on the classpath.*
 
-**Hypernova Service URL:**
+## Development
 
-Configure the URL of your Hypernova service in your `application.properties` or `application.yml` file:
-
-`application.properties`:
-```properties
-hypernova.service.url=http://localhost:3030/batch
-```
-
-`application.yml`:
-```yaml
-hypernova:
-  service:
-    url: http://localhost:3030/batch
-```
-If this property is not set, it defaults to `http://localhost:3030/batch`.
-
-## Basic Usage
-
-1.  **Inject `HypernovaRenderer`:** Autowire the `HypernovaRenderer` into your service or component.
-
-    ```java
-    import com.example.demo.hypernova.HypernovaRenderer;
-    import org.springframework.beans.factory.annotation.Autowired;
-    import org.springframework.stereotype.Service;
-
-    @Service
-    public class MyRenderingService {
-        private final HypernovaRenderer hypernovaRenderer;
-
-        @Autowired
-        public MyRenderingService(HypernovaRenderer hypernovaRenderer) {
-            this.hypernovaRenderer = hypernovaRenderer;
-        }
-        // ...
-    }
+*   **Build the project:**
+    This project uses Maven. To build the project and install artifacts into your local Maven repository:
+    ```bash
+    mvn clean install
     ```
-
-2.  **Create and add `HypernovaJob` instances:** A `HypernovaJob` represents a component to be rendered.
-
-    ```java
-    import com.example.demo.hypernova.HypernovaJob;
-    import java.util.Map;
-    import java.util.HashMap;
-
-    // ... inside a method in MyRenderingService ...
-    Map<String, Object> componentData = new HashMap<>();
-    componentData.put("title", "Hello from Java!");
-    componentData.put("message", "This component was rendered server-side.");
-
-    HypernovaJob job1 = new HypernovaJob("MyReactComponent.js", componentData, null);
-    // The first argument to addJob is a unique client-side identifier for this job
-    hypernovaRenderer.addJob("uniqueJobId1", job1);
-
-    HypernovaJob job2 = new HypernovaJob("AnotherComponent.vue", Map.of("user", "Alice"), null);
-    hypernovaRenderer.addJob("uniqueJobId2", job2);
+*   **Run tests:**
+    To execute the unit tests:
+    ```bash
+    mvn test
     ```
-
-3.  **Call `renderer.render()`:** This sends the batched jobs to the Hypernova service.
-
-    ```java
-    import com.example.demo.hypernova.HypernovaResponse;
-
-    HypernovaResponse response = hypernovaRenderer.render();
-    ```
-
-4.  **Access results:** The `HypernovaResponse` contains the rendering results.
-
-    ```java
-    import com.example.demo.hypernova.HypernovaJobResult;
-
-    if (response.getError() != null) {
-        // Handle top-level error (e.g., Hypernova service unreachable)
-        System.err.println("Hypernova request failed: " + response.getError());
-    }
-
-    HypernovaJobResult result1 = response.getResults().get("uniqueJobId1");
-    if (result1 != null && result1.isSuccess()) {
-        System.out.println("Rendered HTML for job1: " + result1.getHtml());
-    } else if (result1 != null) {
-        System.err.println("Job1 rendering failed: " + result1.getError());
-        // Fallback HTML might be in result1.getHtml() if DevModePlugin is active
-    }
-    ```
-
-## Plugin System
-
-The client features a plugin system that allows you to hook into various lifecycle stages of the rendering process.
-
-*   **`HypernovaPlugin` Interface:** Defines methods corresponding to different lifecycle events.
-*   **`BaseHypernovaPlugin`:** An abstract class providing no-op implementations for all `HypernovaPlugin` methods, making it convenient to extend and override only the methods you need.
-
-**Key Lifecycle Methods:**
-
-*   `getViewData(String viewName, Map<String, Object> data, HypernovaJob originalJob)`: Allows modification of job data before it's processed further.
-*   `prepareRequest(List<HypernovaJob> jobs, List<HypernovaJob> originalJobs)`: Allows modification of the list of jobs just before sending to Hypernova.
-*   `shouldSendRequest(List<HypernovaJob> jobs)`: Can prevent the request from being sent entirely.
-*   `willSendRequest(List<HypernovaJob> jobs)`: Called just before the HTTP request is made.
-*   `onSuccess(HypernovaJobResult jobResult)`: Called for each successfully rendered job.
-*   `onError(Object error, List<HypernovaJobResult> jobResults, List<HypernovaJob> originalJobs)`: Called if there are errors during the process (either top-level or per-job).
-*   `afterResponse(Map<String, HypernovaJobResult> jobResults)`: Allows modification of the results map after the response is received and processed.
-
-**Creating a Custom Plugin:**
-
-```java
-package com.example.demo.plugins;
-
-import com.example.demo.hypernova.HypernovaJob;
-import com.example.demo.hypernova.HypernovaJobResult;
-import com.example.demo.hypernova.plugin.BaseHypernovaPlugin;
-import org.springframework.stereotype.Component;
-import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-@Component // Make it a Spring bean to be auto-detected or manually add it
-public class MyCustomPlugin extends BaseHypernovaPlugin {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MyCustomPlugin.class);
-
-    @Override
-    public HypernovaJob getViewData(String viewName, Map<String, Object> data, HypernovaJob originalJob) {
-        LOGGER.info("MyCustomPlugin: Processing view data for component: {}", viewName);
-        // Example: Add a common piece of data to all jobs
-        if (data != null) {
-            data.put("commonPluginData", "Hello from plugin!");
-        }
-        return new HypernovaJob(viewName, data, originalJob != null ? originalJob.getMetadata() : null);
-    }
-
-    @Override
-    public void onSuccess(HypernovaJobResult jobResult) {
-        LOGGER.info("MyCustomPlugin: Job successfully rendered: {}", jobResult.getOriginalJob().getName());
-    }
-}
-```
-
-**Registering a Plugin:**
-
-If your plugin is a Spring bean (annotated with `@Component` or defined via `@Bean`), you can inject it into your service where `HypernovaRenderer` is used and then add it:
-
-```java
-// In your service or configuration class
-@Autowired
-public MyRenderingService(HypernovaRenderer hypernovaRenderer, MyCustomPlugin myCustomPlugin) {
-    this.hypernovaRenderer = hypernovaRenderer;
-    this.hypernovaRenderer.addPlugin(myCustomPlugin);
-    // Add other plugins if needed
-}
-```
-Alternatively, you can directly instantiate and add plugins if they are not Spring-managed, though Spring management is recommended.
-
-## Included Plugins
-
-*   **`DevModePlugin`:** (Located in `com.example.demo.hypernova.plugin.DevModePlugin`)
-    *   If a component fails to render and an error is present in the `HypernovaJobResult`, this plugin prepends a detailed error message (including component name, error message, and stack trace) wrapped in styled HTML to the original (often fallback) HTML. This is very useful during development to quickly identify issues with server-side rendering.
-    *   It is automatically registered if it's a Spring bean in the application context and added to the `HypernovaRenderer` instance.
-
-## Error Handling
-
-*   **Top-level errors:** If the entire batch request to Hypernova fails (e.g., network issue, Hypernova service down), the `HypernovaResponse.getError()` method will return an error object.
-*   **Per-job errors:** Individual jobs might fail to render even if the batch request itself succeeds. In such cases, the specific `HypernovaJobResult` for that job will have its `isSuccess()` method return `false`, and `getError()` will contain details about the error (often a map with `message` and `stack` keys).
-*   **Plugin interaction:** Plugins can react to errors via the `onError` lifecycle method. The `DevModePlugin` is an example of this, formatting errors into user-visible messages.
 
 ## Contributing
 
-Contributions are welcome! If you have suggestions, bug reports, or want to contribute code, please feel free to:
-
+Contributions are welcome! Please follow these general guidelines:
 1.  Fork the repository.
-2.  Create a new branch for your feature or fix.
-3.  Make your changes.
-4.  Add appropriate tests.
-5.  Submit a pull request.
+2.  Create a new branch for your feature or bug fix (e.g., `feature/my-new-feature` or `fix/issue-123`).
+3.  Make your changes, including appropriate tests and Javadoc documentation.
+4.  Ensure all tests pass (`mvn test`).
+5.  Submit a pull request against the `main` branch.
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for details (assuming one would be added, mirroring common open-source practices).
-
+This project is licensed under the MIT License. See the `LICENSE` file for details.
+```
